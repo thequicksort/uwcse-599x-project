@@ -40,7 +40,7 @@ class NanoporeTERDataset(Dataset):
             item = self.transform(item)
         return item
 
-    
+
 # def get_raw_data_and_labels(raw_data_path, classes_path):
 #     try:
 #         raw = np.load(raw_data_path)
@@ -81,6 +81,7 @@ def split_dataset(dataset, train_percent=0.9, validation_percent=0.05, test_perc
 
     print(f"train: {train_length}\tval: {val_length}\ttest: {test_length}\ttotal: {length}")
     if seed:
+        print(f"Using seed in split_dataset: {seed}")
         torch.random.manual_seed(seed)
     train, val, test = torch.utils.data.random_split(dataset, [train_length, val_length, test_length])
     return train, val, test
