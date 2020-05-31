@@ -8,6 +8,7 @@ from torch.autograd import Variable
 import argparse
 
 import torch.autograd as autograd
+import time
 
 #from sklearn.model_selection import train_test_split
 
@@ -58,21 +59,24 @@ def normalize_data(raw) -> np.ndarray:
 
 class NanoporeterClassifierLSTM(nn.Module):
 
-    def __init__(self, signal_length, hidden_size, batch_size, output_size=1, num_layers=2):
+    def __init__(self, signal_length, hidden_size, batch_size, device, output_size=1, num_layers=2):
         super(NanoporeterClassifierLSTM, self).__init__()
         self.signal_length = signal_length
         self.hidden_size = hidden_size
         self.batch_size = batch_size
         self.output_size = output_size
         self.num_layers = num_layers
+        self.device = device
+        
+        self.to(self.device)
 
         self.relu = nn.ReLU()
         # input_size == 1, we're only looking at one feature: electropheoretic current
-        self.lstm = nn.LSTM(input_size=1, hidden_size=self.hidden_size, num_layers=self.num_layers) #, batch_first=True, bidirectional=False)
+        self.lstm = nn.LSTM(input_size=1, hidden_size=self.hidden_size, num_layers=self.num_layers).to(self.device) #, batch_first=True, bidirectional=False)
 
-        self.fully_connected_1 = nn.Linear(self.hidden_size, self.hidden_size // 2)
-        self.fully_connected_2 = nn.Linear(self.hidden_size // 2, self.hidden_size // 2)
-        self.fully_connected_3 = nn.Linear(self.hidden_size // 2, output_size)
+        self.fully_connected_1 = nn.Linear(self.hidden_size, self.hidden_size // 2).to(self.device)
+        self.fully_connected_2 = nn.Linear(self.hidden_size // 2, self.hidden_size // 2).to(self.device)
+        self.fully_connected_3 = nn.Linear(self.hidden_size // 2, output_size).to(self.device)
         self.hidden = self.init_hidden()
 
     def init_hidden(self):
@@ -81,10 +85,9 @@ class NanoporeterClassifierLSTM(nn.Module):
         return (hidden_0, cell_0)
 
     def forward(self, x):
-        hidden_0 = Variable(torch.zeros(self.num_layers, self.signal_length, self.hidden_size))
-        cell_0 = Variable(torch.zeros(self.num_layers, self.signal_length, self.hidden_size))
-
-        out, self.hidden = self.lstm(x.float().unsqueeze(2), (hidden_0, cell_0))
+        hidden_0 = Variable(torch.zeros(self.num_layers, self.signal_length, self.hidden_size)).to(self.device)
+        cell_0 = Variable(torch.zeros(self.num_layers, self.signal_length, self.hidden_size)).to(self.device)
+        out, _ = self.lstm(x.float().unsqueeze(2), (hidden_0, cell_0))
         out = self.relu(self.fully_connected_1(out[:, -1, :].data))
         out = self.relu(self.fully_connected_2(out))
         out = self.relu(self.fully_connected_3(out))
@@ -99,6 +102,7 @@ def train_epoch(model, training_dataloader, device, loss_function, optimizer=Non
     acc = 0.0
     size = 0
     for i, data in enumerate(training_dataloader):
+        toc = time.time()
         with torch.set_grad_enabled(True):
             torch.autograd.set_detect_anomaly(True)
             signal = data["signal"]
@@ -118,7 +122,10 @@ def train_epoch(model, training_dataloader, device, loss_function, optimizer=Non
             loss.backward()
             if optimizer:
                 optimizer.step()
-
+        tic = time.time()
+        diff = tic - toc # on the clock
+        print(f"Single sample time: {diff:.4f}")
+        
     avg_loss = running_loss / len(training_dataloader)
     if print_epoch:
         message = f"Epoch[{epoch}] - Average Loss: {avg_loss}"
@@ -145,10 +152,8 @@ def validate_epoch(model, validation_dataloader, device, epoch=0, print_epoch=Fa
         print(msg)
     return accuracy
 
-def train_epochs(model: nn.Module, train_dataset, val_dataset, learning_rate=0.5, epochs=1000, batch_size=1, shuffle=True, num_workers=4, print_every=10, seed=DEFAULT_SEED):
-    # Set up Cuda if available
-    use_cuda = torch.cuda.is_available()
-    device = torch.device("cuda:0" if use_cuda else "cpu")
+def train_epochs(model: nn.Module, train_dataset, val_dataset, device, learning_rate=0.5, epochs=1000, batch_size=1, shuffle=True, num_workers=4, print_every=10, seed=DEFAULT_SEED):
+
     #torch.backends.cudnn.benchmark = True
 
     loss_function = nn.CrossEntropyLoss()
@@ -176,9 +181,8 @@ def train_epochs(model: nn.Module, train_dataset, val_dataset, learning_rate=0.5
 
     return zip(epoch_list, losses, accuracies)
 
-from functools import partial
 
-def train(raw_file, label_file, model_dir=".", seed=DEFAULT_SEED, epochs=100, learning_rate=0.05, hidden_size=120, batch_size=4, shuffle=True, num_workers=4):
+def train(raw_file, label_file, device, model_dir=".", seed=DEFAULT_SEED, epochs=100, learning_rate=0.05, hidden_size=120, batch_size=4, shuffle=True, num_workers=4):
     dataset = NanoporeTERDataset(raw_file, label_file)
 
     train, val, test = split_dataset(dataset, train_percent=0.9, validation_percent=0.05, test_percent=0.05, seed=seed)
@@ -188,10 +192,10 @@ def train(raw_file, label_file, model_dir=".", seed=DEFAULT_SEED, epochs=100, le
     classes = np.unique(train.dataset.labels)
     n_classes = len(classes)
     output_size = n_classes #len(Y_train[0])
-    model = NanoporeterClassifierLSTM(input_size, hidden_size, batch_size, output_size=output_size)
-    model.hidden = model.init_hidden()
+    model = NanoporeterClassifierLSTM(input_size, hidden_size, batch_size, device, output_size=output_size)
+    #model.hidden = model.init_hidden()
 
-    epochLossAndAccuracy = train_epochs(model, train, val, epochs=epochs, num_workers=num_workers, print_every=1)
+    epochLossAndAccuracy = train_epochs(model, train, val, device, epochs=epochs, num_workers=num_workers, print_every=1)
     if model_dir:
         save_model(model, model_dir, "LSTM", epochLossAndAccuracy)
 
@@ -258,7 +262,11 @@ def main(args):
     # epochs = 1
 
     print(f"Training with args: {args!s}")
-    train(args.raw, args.labeled, model_dir=args.modeldir, seed=args.seed, learning_rate=args.learningrate, num_workers=args.n_workers, batch_size=args.batchsize, epochs=args.epochs)
+    # Set up Cuda if available
+    use_cuda = torch.cuda.is_available()
+    device = torch.device("cuda:0" if use_cuda else "cpu")
+    
+    train(args.raw, args.labeled, device, model_dir=args.modeldir, seed=args.seed, learning_rate=args.learningrate, num_workers=args.n_workers, batch_size=args.batchsize, epochs=args.epochs)
 
 
 if __name__ == "__main__":
