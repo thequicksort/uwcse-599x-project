@@ -34,28 +34,6 @@ rsync -zaP jdunstan@misl-a.cs.washington.edu:/disk1/pore_data/NanoporeTERs/Y00_Y
 rsync -zaP jdunstan@misl-a.cs.washington.edu:/disk1/pore_data/NanoporeTERs/Y00_Y08_MinIONNoise_LBNoise_EcoliNoise_raw20000_03132019.npy .
     """
 
-def get_raw_data_and_labels(raw_data_path, classes_path):
-    try:
-        raw = np.load(raw_data_path)
-        labeled = np.load(classes_path)
-        return raw, labeled
-    except Exception:
-        logging.error("Unable to find data at path")
-
-def shuffled_data(data, seed=0xBEEF5EED):
-    np.random.seed(seed=seed)
-    shuffled_indecies = np.arange(0, len(data), 1)
-    np.random.shuffle(shuffled_indecies)
-    data = np.array(data)[shuffled_indecies]
-    return data
-
-
-def normalize_data(raw) -> np.ndarray:
-    mean = np.mean(raw)
-    variance = np.var(raw)
-    normalized = (raw - mean) / (np.sqrt(variance))
-    normalized = normalized / 100.0
-    return normalized
 
 class NanoporeterClassifierLSTM(nn.Module):
 
@@ -71,12 +49,13 @@ class NanoporeterClassifierLSTM(nn.Module):
         self.to(self.device)
 
         self.relu = nn.ReLU()
+        self.sigmoid = nn.Sigmoid()
         # input_size == 1, we're only looking at one feature: electropheoretic current
         self.lstm = nn.LSTM(input_size=1, hidden_size=self.hidden_size, num_layers=self.num_layers).to(self.device) #, batch_first=True, bidirectional=False)
 
-        self.fully_connected_1 = nn.Linear(self.hidden_size, self.hidden_size // 2).to(self.device)
-        self.fully_connected_2 = nn.Linear(self.hidden_size // 2, self.hidden_size // 2).to(self.device)
-        self.fully_connected_3 = nn.Linear(self.hidden_size // 2, output_size).to(self.device)
+        self.fully_connected_1 = nn.Linear(self.hidden_size, output_size).to(self.device)
+        #self.fully_connected_2 = nn.Linear(self.hidden_size // 2, self.hidden_size // 2).to(self.device)
+        #self.fully_connected_3 = nn.Linear(self.hidden_size // 2, output_size).to(self.device)
         self.hidden = self.init_hidden()
 
     def init_hidden(self):
@@ -85,31 +64,31 @@ class NanoporeterClassifierLSTM(nn.Module):
         return (hidden_0, cell_0)
 
     def forward(self, x):
-        hidden_0 = Variable(torch.zeros(self.num_layers, self.signal_length, self.hidden_size)).to(self.device)
-        cell_0 = Variable(torch.zeros(self.num_layers, self.signal_length, self.hidden_size)).to(self.device)
-        out, _ = self.lstm(x.float().unsqueeze(2), (hidden_0, cell_0))
-        out = self.relu(self.fully_connected_1(out[:, -1, :].data))
-        out = self.relu(self.fully_connected_2(out))
-        out = self.relu(self.fully_connected_3(out))
+        #hidden_0 = Variable(torch.zeros(self.num_layers, self.signal_length, self.hidden_size)).to(self.device)
+        #cell_0 = Variable(torch.zeros(self.num_layers, self.signal_length, self.hidden_size)).to(self.device)
+        out, (ht, ct) = self.lstm(x.float().unsqueeze(2))#, (hidden_0, cell_0))
+        output = self.fully_connected_1(out[:, -1, :].data)
+        output = self.sigmoid(output)
+        return output
+#         out = self.relu(self.fully_connected_2(out))
+#         out = self.relu(self.fully_connected_3(out))
         # softmaxed_out = F.softmax(out, dim=1)
         # return softmaxed_out
         #out = out.view(-1)
         return out
 
 
-def train_epoch(model, training_dataloader, device, loss_function, optimizer=None, epoch=0, print_epoch=False):
+def train_epoch(model, training_dataloader, device, loss_function, optimizer=None, epoch=0, print_epoch=False, print_every=100):
     running_loss = 0.0
-    acc = 0.0
-    size = 0
+    model.zero_grad()
+
     for i, data in enumerate(training_dataloader):
-        toc = time.time()
+        #toc = time.time()
         with torch.set_grad_enabled(True):
-            torch.autograd.set_detect_anomaly(True)
             signal = data["signal"]
             label = data["label"].squeeze(1)
             signal, label = signal.to(device), label.to(device)
 
-            model.zero_grad()
             if optimizer:
                 optimizer.zero_grad()
             estimate = model(signal)
@@ -122,13 +101,20 @@ def train_epoch(model, training_dataloader, device, loss_function, optimizer=Non
             loss.backward()
             if optimizer:
                 optimizer.step()
-        tic = time.time()
-        diff = tic - toc # on the clock
-        print(f"Single sample time: {diff:.4f}")
+                
+        if print_epoch and (i % print_every == print_every - 1):
+            message = f"\tEpoch[{epoch}] [{i}] - Average Loss: {running_loss/(i+1)}"
+            print(message)
+                
+# Was used for profiling (found GPU on cloud to be 10x faster than my own machine. wow)
+#         tic = time.time()
+#         diff = tic - toc # on the clock
+#         print(f"Single sample time: {diff:.4f}")
         
     avg_loss = running_loss / len(training_dataloader)
     if print_epoch:
         message = f"Epoch[{epoch}] - Average Loss: {avg_loss}"
+        print(message)
     return avg_loss
 
 
@@ -152,7 +138,7 @@ def validate_epoch(model, validation_dataloader, device, epoch=0, print_epoch=Fa
         print(msg)
     return accuracy
 
-def train_epochs(model: nn.Module, train_dataset, val_dataset, device, learning_rate=0.5, epochs=1000, batch_size=1, shuffle=True, num_workers=4, print_every=10, seed=DEFAULT_SEED):
+def train_epochs(model: nn.Module, train_dataset, val_dataset, device, learning_rate=0.05, epochs=10, batch_size=1, shuffle=True, num_workers=4, print_every=100, seed=DEFAULT_SEED):
 
     #torch.backends.cudnn.benchmark = True
 
@@ -171,8 +157,8 @@ def train_epochs(model: nn.Module, train_dataset, val_dataset, device, learning_
     epoch_list = []
 
     for epoch in range(epochs):
-        print_epoch = True if print_every <= 1 else epoch % print_every == print_every - 1
-        loss = train_epoch(model, training_dataloader, device, loss_function, optimizer, epoch=epoch, print_epoch=print_epoch)
+        print_epoch = print_every > 0
+        loss = train_epoch(model, training_dataloader, device, loss_function, optimizer, epoch=epoch, print_epoch=print_epoch, print_every=print_every)
         accuracy = validate_epoch(model, val_dataloader, device, epoch=epoch, print_epoch=print_epoch)
 
         losses.append(loss)
@@ -182,7 +168,7 @@ def train_epochs(model: nn.Module, train_dataset, val_dataset, device, learning_
     return zip(epoch_list, losses, accuracies)
 
 
-def train(raw_file, label_file, device, model_dir=".", seed=DEFAULT_SEED, epochs=100, learning_rate=0.05, hidden_size=120, batch_size=4, shuffle=True, num_workers=4):
+def train(raw_file, label_file, device, model_dir=".", seed=DEFAULT_SEED, epochs=10, n_hidden=2, learning_rate=0.05, batch_size=4, shuffle=True, num_workers=4, print_every=100):
     dataset = NanoporeTERDataset(raw_file, label_file)
 
     train, val, test = split_dataset(dataset, train_percent=0.9, validation_percent=0.05, test_percent=0.05, seed=seed)
@@ -192,10 +178,10 @@ def train(raw_file, label_file, device, model_dir=".", seed=DEFAULT_SEED, epochs
     classes = np.unique(train.dataset.labels)
     n_classes = len(classes)
     output_size = n_classes #len(Y_train[0])
-    model = NanoporeterClassifierLSTM(input_size, hidden_size, batch_size, device, output_size=output_size)
+    model = NanoporeterClassifierLSTM(input_size, n_hidden, batch_size, device, output_size=output_size)
     #model.hidden = model.init_hidden()
 
-    epochLossAndAccuracy = train_epochs(model, train, val, device, epochs=epochs, num_workers=num_workers, print_every=1)
+    epochLossAndAccuracy = train_epochs(model, train, val, device, learning_rate=learning_rate, epochs=epochs, batch_size=batch_size, num_workers=num_workers, print_every=print_every)
     if model_dir:
         save_model(model, model_dir, "LSTM", epochLossAndAccuracy)
 
@@ -229,6 +215,7 @@ def get_args():
     num_workers = 6
     batch_size = 1
     epochs = 10
+    n_hidden = 2
 
     parser = argparse.ArgumentParser(description="Training for nanoporeter classifiers")
     parser.add_argument("--raw", action="store", required=True, help="Raw signal data, corresponding to labels data")
@@ -239,6 +226,7 @@ def get_args():
     parser.add_argument("--batchsize", "-b", action="store", required=False,type=int, default=batch_size, help="Worker batch size for data")
     parser.add_argument("--epochs", "-e", action="store", required=False, type=int, default=epochs, help="Number of epochs to train for")
     parser.add_argument("--modeldir", action="store", required=False, default=MODEL_DIR, help="Where to store models")
+    parser.add_argument("--n_hidden", action="store", required=False, type=int, default=n_hidden, help="Number of hidden layers")
 
     args = parser.parse_args()
 
@@ -266,7 +254,7 @@ def main(args):
     use_cuda = torch.cuda.is_available()
     device = torch.device("cuda:0" if use_cuda else "cpu")
     
-    train(args.raw, args.labeled, device, model_dir=args.modeldir, seed=args.seed, learning_rate=args.learningrate, num_workers=args.n_workers, batch_size=args.batchsize, epochs=args.epochs)
+    train(args.raw, args.labeled, device, model_dir=args.modeldir, seed=args.seed, learning_rate=args.learningrate, n_hidden=args.n_hidden, num_workers=args.n_workers, batch_size=args.batchsize, epochs=args.epochs)
 
 
 if __name__ == "__main__":

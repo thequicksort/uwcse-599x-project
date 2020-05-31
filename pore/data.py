@@ -40,6 +40,28 @@ class NanoporeTERDataset(Dataset):
             item = self.transform(item)
         return item
 
+    
+# def get_raw_data_and_labels(raw_data_path, classes_path):
+#     try:
+#         raw = np.load(raw_data_path)
+#         labeled = np.load(classes_path)
+#         return raw, labeled
+#     except Exception:
+#         logging.error("Unable to find data at path")
+
+# def shuffled_data(data, seed=0xBEEF5EED):
+#     np.random.seed(seed=seed)
+#     shuffled_indecies = np.arange(0, len(data), 1)
+#     np.random.shuffle(shuffled_indecies)
+#     data = np.array(data)[shuffled_indecies]
+#     return data
+
+
+def normalize_data(raw) -> np.ndarray:
+    mean = np.mean(raw)
+    variance = np.var(raw)
+    normalized = (raw - mean) / (100 * np.sqrt(variance)) # The divide by 100 is just to make things nice and small
+    return normalized
 
 def split_dataset(dataset, train_percent=0.9, validation_percent=0.05, test_percent=0.05, seed=None):
     length = len(dataset)
