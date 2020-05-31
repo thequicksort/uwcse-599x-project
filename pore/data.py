@@ -23,9 +23,6 @@ class NanoporeTERDataset(Dataset):
     def __init__(self, raw_file, labeled_file, transform=None):
         self.raw_data = np.load(Path(raw_file).absolute())
         self.labels = np.load(Path(labeled_file).absolute())
-
-        self.raw_data = self.raw_data[0:100]
-        self.labels = self.labels[0:100]
         self.transform = transform
 
     def __len__(self):

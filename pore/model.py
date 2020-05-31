@@ -81,8 +81,8 @@ class NanoporeterClassifierLSTM(nn.Module):
         return (hidden_0, cell_0)
 
     def forward(self, x):
-        hidden_0 = Variable(torch.zeros(self.num_layers, self.signal_length, self.hidden_size).float())
-        cell_0 = Variable(torch.zeros(self.num_layers, self.signal_length, self.hidden_size).float())
+        hidden_0 = Variable(torch.zeros(self.num_layers, self.signal_length, self.hidden_size))
+        cell_0 = Variable(torch.zeros(self.num_layers, self.signal_length, self.hidden_size))
 
         out, self.hidden = self.lstm(x.float().unsqueeze(2), (hidden_0, cell_0))
         out = self.relu(self.fully_connected_1(out[:, -1, :].data))
@@ -100,23 +100,25 @@ def train_epoch(model, training_dataloader, device, loss_function, optimizer=Non
     size = 0
     for i, data in enumerate(training_dataloader):
         with torch.set_grad_enabled(True):
+            torch.autograd.set_detect_anomaly(True)
             signal = data["signal"]
             label = data["label"].squeeze(1)
             signal, label = signal.to(device), label.to(device)
 
             model.zero_grad()
-            estimate = model(signal)
-            loss = loss_function(estimate, label)
-
             if optimizer:
                 optimizer.zero_grad()
-                optimizer.step()
-
+            estimate = model(signal)
+            loss = loss_function(estimate, label)
+            
             # Update metavariables
             running_loss += loss.data
 
             # Backwards step
-            loss.backward(create_graph=True)
+            loss.backward()
+            if optimizer:
+                optimizer.step()
+
     avg_loss = running_loss / len(training_dataloader)
     if print_epoch:
         message = f"Epoch[{epoch}] - Average Loss: {avg_loss}"
@@ -150,7 +152,7 @@ def train_epochs(model: nn.Module, train_dataset, val_dataset, learning_rate=0.5
     #torch.backends.cudnn.benchmark = True
 
     loss_function = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate)
 
     training_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers)
     val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers)
