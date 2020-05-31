@@ -1,0 +1,15 @@
+numpy
+# Charts and plotting library
+matplotlib
+tkinter
+# Data visualization
+seaborn
+# Interactive computing
+notebook
+# For interactive builds
+jupyter
+# Neural networks
+torchvision
+torch
+scipy
+scikitlearn
